@@ -13,6 +13,8 @@
  */
 package io.trino.aws.proxy.spark4;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import software.amazon.awssdk.core.interceptor.ExecutionAttributes;
 import software.amazon.awssdk.core.signer.Signer;
 import software.amazon.awssdk.http.SdkHttpFullRequest;
@@ -24,6 +26,8 @@ import static java.util.Objects.requireNonNull;
 class PresignAwareSigner
         implements Signer
 {
+    private static final Log log = LogFactory.getLog(PresignAwareSigner.class);
+
     private final URI uri;
 
     PresignAwareSigner(URI uri)
@@ -34,6 +38,7 @@ class PresignAwareSigner
     @Override
     public SdkHttpFullRequest sign(SdkHttpFullRequest request, ExecutionAttributes executionAttributes)
     {
+        log.debug("Rewriting request to " + uri);
         // presigned requests are not signed, and we can take the opportunity
         // here to replace the URI with the presigned one
         return request.toBuilder().encodedPath("").uri(uri).build();

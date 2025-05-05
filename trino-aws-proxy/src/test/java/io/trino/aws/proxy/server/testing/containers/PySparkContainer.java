@@ -24,8 +24,10 @@ import org.testcontainers.containers.BindMode;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.images.builder.Transferable;
 import org.testcontainers.utility.DockerImageName;
+import org.testcontainers.utility.MountableFile;
 
 import java.io.File;
+import java.util.Optional;
 
 import static io.trino.aws.proxy.server.testing.TestingUtil.findTestJar;
 import static io.trino.aws.proxy.server.testing.containers.DockerAttachUtil.clearInputStreamAndClose;
@@ -106,11 +108,13 @@ public abstract class PySparkContainer
         };
 
         String s3Endpoint = asHostUrl(httpServer.getBaseUrl().resolve(trinoS3ProxyConfig.getS3Path()).toString());
+        String s3EndpointRegion = Optional.ofNullable(System.getenv("AWS_REGION")).orElse("us-east-1");
         String metastoreEndpoint = asHostUrl("localhost:" + metastoreContainer.port());
 
         String sparkConfFile = """
                 hive.metastore.uris                          %s
                 spark.hadoop.fs.s3a.endpoint                 %s
+                spark.hadoop.fs.s3a.endpoint.region          %s
                 spark.hadoop.fs.s3a.s3.client.factory.impl   %s
                 spark.hadoop.fs.s3a.access.key               %s
                 spark.hadoop.fs.s3a.secret.key               %s
@@ -118,13 +122,17 @@ public abstract class PySparkContainer
                 spark.hadoop.fs.s3a.connection.ssl.enabled   False
                 spark.hadoop.fs.s3a.aws.credentials.provider org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider
                 spark.hadoop.fs.s3a.impl                     org.apache.hadoop.fs.s3a.S3AFileSystem
-                """.formatted(metastoreEndpoint, s3Endpoint, clientFactoryClassName, testingCredentials.emulated().accessKey(), testingCredentials.emulated().secretKey());
+                spark.driver.extraJavaOptions                -Dlog4j2.configurationFile=file:/opt/spark/conf/log4j2.properties
+                spark.executor.extraJavaOptions              -Dlog4j2.configurationFile=file:/opt/spark/conf/log4j2.properties
+                """.formatted(metastoreEndpoint, s3Endpoint, s3EndpointRegion, clientFactoryClassName, testingCredentials.emulated().accessKey(), testingCredentials.emulated().secretKey());
 
+        MountableFile logProperties = MountableFile.forClasspathResource("log4j2.properties");
         container = new GenericContainer<>(dockerImageName)
                 .withFileSystemBind(hadoopJar.getAbsolutePath(), "/opt/spark/jars/hadoop.jar", BindMode.READ_ONLY)
                 .withFileSystemBind(awsSdkJar.getAbsolutePath(), "/opt/spark/jars/aws.jar", BindMode.READ_ONLY)
                 .withFileSystemBind(trinoClientDirectory.getAbsolutePath(), "/opt/spark/jars/TrinoAwsProxyClient.jar", BindMode.READ_ONLY)
                 .withCopyToContainer(Transferable.of(sparkConfFile), "/opt/spark/conf/spark-defaults.conf")
+                .withCopyFileToContainer(logProperties, "/opt/spark/conf/log4j2.properties")
                 .withCreateContainerCmdModifier(modifier -> modifier.withTty(true).withStdinOpen(true).withAttachStdin(true).withAttachStdout(true).withAttachStderr(true))
                 .withCommand("/opt/spark/bin/pyspark");
 

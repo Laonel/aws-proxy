@@ -112,7 +112,9 @@ public final class TestingTrinoAwsProxyServer
 
             modules.add(binder -> {
                 binder.bind(S3Container.class).asEagerSingleton();
-                binder.bind(Credentials.class).annotatedWith(ForTesting.class).toInstance(TESTING_CREDENTIALS);
+                newOptionalBinder(binder, Key.get(Credentials.class, ForTesting.class))
+                        .setDefault()
+                        .toInstance(TESTING_CREDENTIALS);
                 newOptionalBinder(binder, Key.get(new TypeLiteral<List<String>>() {}, ForS3Container.class)).setDefault().toInstance(ImmutableList.of());
 
                 newOptionalBinder(binder, Key.get(RemoteS3Facade.class, ForTesting.class))
@@ -253,7 +255,10 @@ public final class TestingTrinoAwsProxyServer
 
         Bootstrap app = new Bootstrap(modules.build());
         Injector injector = app.setOptionalConfigurationProperties(properties).initialize();
-        Logging.initialize().setLevel("io.trino.aws.proxy", Level.DEBUG);
+        Logging logging = Logging.initialize();
+        logging.setLevel("io.trino.aws.proxy", Level.DEBUG);
+        logging.setLevel("com.amazonaws.request", Level.DEBUG);
+        logging.setLevel("software.amazon.awssdk.request", Level.DEBUG);
 
         return new TestingTrinoAwsProxyServer(injector);
     }

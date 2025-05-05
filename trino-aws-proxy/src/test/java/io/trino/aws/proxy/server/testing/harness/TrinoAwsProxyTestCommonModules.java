@@ -17,6 +17,8 @@ import com.google.common.collect.ImmutableList;
 import com.google.inject.Key;
 import com.google.inject.Scopes;
 import com.google.inject.TypeLiteral;
+import io.trino.aws.proxy.server.remote.PathStyleRemoteS3Facade;
+import io.trino.aws.proxy.server.remote.RemoteS3HostBuilder;
 import io.trino.aws.proxy.server.testing.ContainerS3Facade;
 import io.trino.aws.proxy.server.testing.TestingTrinoAwsProxyServer;
 import io.trino.aws.proxy.server.testing.TestingUtil.ForTesting;
@@ -24,6 +26,7 @@ import io.trino.aws.proxy.server.testing.containers.S3Container.ForS3Container;
 import io.trino.aws.proxy.spi.remote.RemoteS3Facade;
 
 import java.util.List;
+import java.util.Optional;
 
 import static com.google.inject.multibindings.OptionalBinder.newOptionalBinder;
 import static io.airlift.http.client.HttpClientBinder.httpClientBinder;
@@ -57,6 +60,28 @@ public final class TrinoAwsProxyTestCommonModules
                             .setBinding()
                             .to(ContainerS3Facade.VirtualHostStyleContainerS3Facade.class)
                             .in(Scopes.SINGLETON));
+        }
+    }
+
+    public static class WithAwsSFacade
+            implements BuilderFilter
+    {
+        @Override
+        public TestingTrinoAwsProxyServer.Builder filter(TestingTrinoAwsProxyServer.Builder builder)
+        {
+            return builder.addModule(binder ->
+            {
+                newOptionalBinder(binder, Key.get(RemoteS3Facade.class, ForTesting.class))
+                        .setBinding()
+                        .toInstance(new PathStyleRemoteS3Facade(
+                                (bucket, region) -> RemoteS3HostBuilder.getHostName(
+                                        bucket,
+                                        region,
+                                        "amazonaws.com",
+                                        "s3.${region}.${domain}"),
+                                true,
+                                Optional.empty()));
+            });
         }
     }
 

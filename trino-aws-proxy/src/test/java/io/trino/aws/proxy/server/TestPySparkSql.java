@@ -21,12 +21,17 @@ import io.trino.aws.proxy.server.testing.harness.BuilderFilter;
 import io.trino.aws.proxy.server.testing.harness.TrinoAwsProxyTest;
 import org.junit.jupiter.api.Test;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.Delete;
+import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
+import software.amazon.awssdk.services.s3.model.ObjectIdentifier;
 
 import java.nio.file.Path;
 
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static io.trino.aws.proxy.server.testing.containers.DockerAttachUtil.clearInputStreamAndClose;
 import static io.trino.aws.proxy.server.testing.containers.DockerAttachUtil.inputToContainerStdin;
 import static java.util.Objects.requireNonNull;
+import static java.util.UUID.randomUUID;
 
 @TrinoAwsProxyTest(filters = TestPySparkSql.Filter.class)
 public class TestPySparkSql
@@ -58,31 +63,44 @@ public class TestPySparkSql
     public void testSql()
             throws Exception
     {
-        createDatabaseAndTable(s3Client, pySparkContainer);
+        String bucketName = "test-" + randomUUID();
+        createDatabaseAndTable(s3Client, pySparkContainer, bucketName);
 
-        clearInputStreamAndClose(inputToContainerStdin(pySparkContainer.containerId(),
-                "spark.sql(\"select * from %s.%s\").show()".formatted(DATABASE_NAME, TABLE_NAME)), line -> line.equals("|    John Galt| 28|"));
+        try {
+            clearInputStreamAndClose(inputToContainerStdin(pySparkContainer.containerId(),
+                    "spark.sql(\"select * from %s.%s\").show()".formatted(DATABASE_NAME, TABLE_NAME)), line -> line.equals("|    John Galt| 28|"));
 
-        clearInputStreamAndClose(inputToContainerStdin(pySparkContainer.containerId(), """
-                columns = ['name', 'age']
-                vals = [('a', 10), ('b', 20), ('c', 30)]
-                
-                df = spark.createDataFrame(vals, columns)
-                df.write.insertInto('%s.%s')
-                """.formatted(DATABASE_NAME, TABLE_NAME)), line -> line.contains("Stage 1:"));
+            clearInputStreamAndClose(inputToContainerStdin(pySparkContainer.containerId(), """
+                    columns = ['name', 'age']
+                    vals = [('a', 10), ('b', 20), ('c', 30)]
+                    
+                    df = spark.createDataFrame(vals, columns)
+                    df.write.insertInto('%s.%s')
+                    """.formatted(DATABASE_NAME, TABLE_NAME)), line -> line.contains("Stage 1:"));
 
-        clearInputStreamAndClose(inputToContainerStdin(pySparkContainer.containerId(),
-                "spark.sql(\"select * from %s.%s\").show()".formatted(DATABASE_NAME, TABLE_NAME)), line -> line.equals("|            c| 30|"));
+            clearInputStreamAndClose(inputToContainerStdin(pySparkContainer.containerId(),
+                    "spark.sql(\"select * from %s.%s\").show()".formatted(DATABASE_NAME, TABLE_NAME)), line -> line.equals("|            c| 30|"));
+        }
+        finally {
+            s3Client.listObjectsV2Paginator(r -> r.bucket(bucketName)).stream()
+                    .map(ListObjectsV2Response::contents)
+                    .forEach(s3Objects -> s3Client.deleteObjects(r -> r
+                            .bucket(bucketName)
+                            .delete(Delete.builder().objects(s3Objects.stream()
+                                    .map(s3Object -> ObjectIdentifier.builder().key(s3Object.key()).build())
+                                    .collect(toImmutableSet())).build())));
+            s3Client.deleteBucket(r -> r.bucket(bucketName));
+        }
     }
 
-    public static void createDatabaseAndTable(S3Client s3Client, PySparkContainer container)
+    public static void createDatabaseAndTable(S3Client s3Client, PySparkContainer container, String bucketName)
             throws Exception
     {
         // create the test bucket
-        s3Client.createBucket(r -> r.bucket("test"));
+        s3Client.createBucket(r -> r.bucket(bucketName));
 
         // upload a CSV file as a potential table
-        s3Client.putObject(r -> r.bucket("test").key("table/file.csv"), Path.of(Resources.getResource("test.csv").toURI()));
+        s3Client.putObject(r -> r.bucket(bucketName).key("table/file.csv"), Path.of(Resources.getResource("test.csv").toURI()));
 
         // create the database
         clearInputStreamAndClose(inputToContainerStdin(container.containerId(), "spark.sql(\"create database %s\")".formatted(DATABASE_NAME)), line -> line.equals("DataFrame[]"));
@@ -92,9 +110,9 @@ public class TestPySparkSql
                 spark.sql(""\"
                   CREATE TABLE IF NOT EXISTS %s.%s(name STRING, age INT)
                   ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'
-                  LOCATION 's3a://test/table/'
+                  LOCATION 's3a://%s/table/'
                   TBLPROPERTIES ("s3select.format" = "csv");
                   ""\")
-                """.formatted(DATABASE_NAME, TABLE_NAME)), line -> line.equals("DataFrame[]"));
+                """.formatted(DATABASE_NAME, TABLE_NAME, bucketName)), line -> line.equals("DataFrame[]"));
     }
 }
